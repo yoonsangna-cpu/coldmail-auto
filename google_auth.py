@@ -37,18 +37,60 @@ SCOPES = [
 
 
 # ─────────────────────────────────────────────────────────
-# redirect_uri 자동 감지
+# 앱 URL 자동 감지 + OAuth 설정 통합 관리
 # ─────────────────────────────────────────────────────────
+
+def detect_app_url() -> str:
+    """
+    현재 앱의 URL을 자동 감지한다.
+    Streamlit Cloud, 로컬 등 환경에 따라 적절한 URL을 반환한다.
+    """
+    try:
+        headers = st.context.headers
+        host = headers.get("Host", "localhost:8501")
+        proto = headers.get("X-Forwarded-Proto", None)
+        if proto:
+            scheme = proto
+        elif host.startswith("localhost") or host.startswith("127.0.0.1"):
+            scheme = "http"
+        else:
+            scheme = "https"
+        return f"{scheme}://{host}"
+    except Exception:
+        return "http://localhost:8501"
+
+
+def _get_oauth_config() -> dict | None:
+    """
+    OAuth 설정을 가져온다.
+    1순위: 세션에 사용자가 직접 입력한 설정
+    2순위: secrets.toml (또는 Streamlit Cloud Secrets)
+    둘 다 없으면 None 반환.
+    """
+    # 1. 세션에 사용자 입력 설정이 있는지 확인
+    if hasattr(st, "session_state") and st.session_state.get("user_oauth_config"):
+        return st.session_state.user_oauth_config
+
+    # 2. st.secrets에서 가져오기
+    try:
+        return {
+            "client_id": st.secrets["google"]["client_id"],
+            "client_secret": st.secrets["google"]["client_secret"],
+            "redirect_uri": st.secrets["google"]["redirect_uri"],
+        }
+    except Exception:
+        return None
+
 
 def _get_redirect_uri() -> str:
     """
     현재 앱의 redirect_uri를 결정한다.
-    secrets.toml에 설정된 값을 사용하되, 없으면 기본 localhost:8501을 사용한다.
+    OAuth 설정에 값이 있으면 사용하고, 없으면 앱 URL을 자동 감지한다.
     """
-    try:
-        return st.secrets["google"]["redirect_uri"]
-    except (KeyError, FileNotFoundError):
-        return "http://localhost:8501"
+    config = _get_oauth_config()
+    if config and config.get("redirect_uri"):
+        return config["redirect_uri"]
+    return detect_app_url()
 
 
 # ─────────────────────────────────────────────────────────
@@ -56,12 +98,15 @@ def _get_redirect_uri() -> str:
 # ─────────────────────────────────────────────────────────
 
 def _get_client_config() -> dict:
-    """secrets.toml에서 Google OAuth 설정을 읽어 client config를 생성한다."""
-    redirect_uri = _get_redirect_uri()
+    """OAuth 설정을 읽어 client config를 생성한다. (세션 또는 secrets.toml)"""
+    config = _get_oauth_config()
+    if not config:
+        raise ValueError("OAuth 설정이 없습니다. client_id와 client_secret을 입력해주세요.")
+    redirect_uri = config["redirect_uri"]
     return {
         "web": {
-            "client_id": st.secrets["google"]["client_id"],
-            "client_secret": st.secrets["google"]["client_secret"],
+            "client_id": config["client_id"],
+            "client_secret": config["client_secret"],
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [redirect_uri],
@@ -284,27 +329,25 @@ def send_email(
 
 def check_secrets_configured() -> tuple[bool, str]:
     """
-    secrets.toml에 Google OAuth 설정이 있는지 확인한다.
+    OAuth 설정이 있는지 확인한다.
+    세션에 사용자 입력 값이 있거나 secrets.toml에 설정이 있으면 True.
     placeholder 값이 아닌 실제 값이 있는지도 검증한다.
 
     Returns:
         (설정 여부, 메시지)
     """
-    try:
-        client_id = st.secrets["google"]["client_id"]
-        client_secret = st.secrets["google"]["client_secret"]
-        redirect_uri = st.secrets["google"]["redirect_uri"]
-
-        # placeholder 값 체크
-        if "YOUR_CLIENT_ID" in client_id or "YOUR_CLIENT_SECRET" in client_secret:
-            return False, "placeholder"
-
-        if not client_id or not client_secret or not redirect_uri:
-            return False, "empty"
-
-        return True, "설정 확인됨"
-
-    except Exception:
-        # KeyError, FileNotFoundError, StreamlitAPIException 등
-        # secrets.toml이 없거나 google 섹션이 없는 모든 경우를 처리
+    config = _get_oauth_config()
+    if not config:
         return False, "missing"
+
+    client_id = config.get("client_id", "")
+    client_secret = config.get("client_secret", "")
+    redirect_uri = config.get("redirect_uri", "")
+
+    if "YOUR_CLIENT_ID" in client_id or "YOUR_CLIENT_SECRET" in client_secret:
+        return False, "placeholder"
+
+    if not client_id or not client_secret or not redirect_uri:
+        return False, "empty"
+
+    return True, "설정 확인됨"

@@ -169,6 +169,7 @@ DEFAULT_STATE = {
     "daily_limit": 500,               # 일일 발송 한도 (사용자 설정)
     "daily_sent_count": 0,            # 오늘 발송한 건수
     "daily_sent_date": "",            # 마지막 발송 날짜 (YYYY-MM-DD)
+    "user_oauth_config": None,        # 사용자가 직접 입력한 OAuth 설정
 }
 
 for key, default_val in DEFAULT_STATE.items():
@@ -258,50 +259,79 @@ with st.sidebar:
         secrets_ok, secrets_msg = check_secrets_configured()
 
         if not secrets_ok:
-            # ── OAuth 미설정: 가이드 표시 ──
+            # ── OAuth 미설정: 설정 가이드 + 입력 폼 ──
+            from google_auth import detect_app_url
+            detected_url = detect_app_url()
+
             st.markdown("""
             <div style="text-align: center; padding: 16px 0;">
                 <div style="font-size: 48px; margin-bottom: 8px;">🔐</div>
                 <div style="color: #5f6368; font-size: 13px;">
-                    Google 로그인을 사용하려면<br/>
-                    OAuth 설정이 필요합니다
+                    시작하려면 Google Cloud API 설정이<br/>
+                    필요합니다 (최초 1회)
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            with st.expander("🔧 설정 방법 (5분 소요)", expanded=True):
-                # 현재 앱 URL을 동적으로 결정
-                from google_auth import _get_redirect_uri
-                current_redirect = _get_redirect_uri()
-
+            with st.expander("📖 설정 가이드 (5분 소요)", expanded=True):
                 st.markdown(f"""
-**1단계: Google Cloud 프로젝트**
+**1단계: Google Cloud 프로젝트 생성**
 - [Google Cloud Console](https://console.cloud.google.com/) 접속
-- 새 프로젝트 생성
+- 새 프로젝트 생성 (또는 기존 프로젝트 선택)
 
 **2단계: API 활성화**
-- [API 라이브러리](https://console.cloud.google.com/apis/library)에서 아래 3개 검색 후 사용 설정:
+- [API 라이브러리](https://console.cloud.google.com/apis/library)에서 아래 3개 검색 후 **사용** 클릭:
   - **Gmail API**
   - **Google Sheets API**
   - **Google Drive API**
 
 **3단계: OAuth 동의 화면**
-- [Auth Platform](https://console.cloud.google.com/auth/overview) → Branding 설정
-- Audience → **외부** 선택 → ADD USERS로 테스트 계정 추가
+- [Auth Platform → Branding](https://console.cloud.google.com/auth/branding) 설정
+- [Audience](https://console.cloud.google.com/auth/audience) → **외부** 선택
+- **PUBLISH APP** 클릭 (또는 ADD USERS로 본인 계정 추가)
 
 **4단계: OAuth 클라이언트 생성**
-- [Clients](https://console.cloud.google.com/auth/clients) → CREATE CLIENT
+- [Clients](https://console.cloud.google.com/auth/clients) → **CREATE CLIENT**
 - 유형: **웹 애플리케이션**
-- 승인된 리디렉션 URI: `{current_redirect}`
-
-**5단계: Secrets 설정**
+- 승인된 리디렉션 URI에 아래 주소 추가:
 """)
-                st.code(f"""[google]
-client_id = "발급받은_ID.apps.googleusercontent.com"
-client_secret = "발급받은_SECRET"
-redirect_uri = "{current_redirect}"
-""", language="toml")
-                st.caption("로컬: `.streamlit/secrets.toml` 수정 후 새로고침\nStreamlit Cloud: 앱 설정 → Secrets에 입력")
+                st.code(detected_url, language=None)
+                st.markdown("**5단계: 아래에 발급받은 정보 입력**")
+
+            # ── OAuth 자격증명 입력 폼 ──
+            st.subheader("🔑 API 설정 입력")
+            with st.form("oauth_setup_form"):
+                input_client_id = st.text_input(
+                    "Client ID",
+                    placeholder="xxxx.apps.googleusercontent.com",
+                    help="Google Cloud Console → Clients에서 복사",
+                )
+                input_client_secret = st.text_input(
+                    "Client Secret",
+                    type="password",
+                    placeholder="GOCSPX-xxxx",
+                    help="Google Cloud Console → Clients에서 복사",
+                )
+                input_redirect_uri = st.text_input(
+                    "Redirect URI",
+                    value=detected_url,
+                    help="보통 자동 감지된 값을 그대로 사용하면 됩니다",
+                )
+                submitted = st.form_submit_button(
+                    "설정 완료 →",
+                    use_container_width=True,
+                    type="primary",
+                )
+                if submitted:
+                    if not input_client_id or not input_client_secret:
+                        st.error("Client ID와 Client Secret을 모두 입력해주세요.")
+                    else:
+                        st.session_state.user_oauth_config = {
+                            "client_id": input_client_id.strip(),
+                            "client_secret": input_client_secret.strip(),
+                            "redirect_uri": input_redirect_uri.strip(),
+                        }
+                        st.rerun()
 
         else:
             # ── OAuth 설정 완료: 로그인 버튼 ──
@@ -339,33 +369,18 @@ redirect_uri = "{current_redirect}"
 
             except Exception as e:
                 st.error(f"OAuth 설정 오류: {e}")
-                st.info("💡 OAuth 설정을 확인해주세요. client_id, client_secret, redirect_uri가 올바른지 확인이 필요합니다.")
+                st.info("💡 입력한 Client ID / Client Secret이 올바른지 확인해주세요.")
+                # 설정 초기화 버튼
+                if st.button("🔄 설정 다시 입력", use_container_width=True):
+                    st.session_state.user_oauth_config = None
+                    st.rerun()
 
-            # ── 403 에러 안내 (항상 표시) ──
-            with st.expander("⚠️ 403 에러 / 로그인이 안 되나요?"):
-                from google_auth import _get_redirect_uri
-                current_redirect = _get_redirect_uri()
-                st.markdown(f"""
-Google Cloud 프로젝트가 **테스트 모드**인 경우, 등록된 테스트 사용자만 로그인할 수 있습니다.
-
-**해결 방법 (택 1):**
-
-**방법 1: 테스트 사용자 추가** (간단)
-1. [Google Cloud Console → Audience](https://console.cloud.google.com/auth/audience) 접속
-2. **ADD USERS** 클릭
-3. 로그인할 Google 계정(Gmail) 주소 입력 후 저장
-4. 이 페이지로 돌아와서 다시 로그인
-
-**방법 2: 앱 게시** (모든 사용자 허용)
-1. [Google Cloud Console → Audience](https://console.cloud.google.com/auth/audience) 접속
-2. **PUBLISH APP** 클릭
-3. 확인 후 저장 → 누구나 로그인 가능
-
----
-**그 외 오류 시 확인사항:**
-- 승인된 리디렉션 URI: `{current_redirect}`
-- Gmail API, Google Sheets API, Google Drive API 활성화 필요
-""")
+            # ── 설정 변경 버튼 (세션 입력값인 경우) ──
+            if st.session_state.get("user_oauth_config"):
+                st.divider()
+                if st.button("⚙️ API 설정 변경", use_container_width=True, type="secondary"):
+                    st.session_state.user_oauth_config = None
+                    st.rerun()
 
         # 로그인 에러 표시
         if "login_error" in st.session_state:
@@ -392,8 +407,12 @@ Google Cloud 프로젝트가 **테스트 모드**인 경우, 등록된 테스트
         """, unsafe_allow_html=True)
 
         if st.button("로그아웃", use_container_width=True, type="secondary"):
+            # OAuth API 설정은 유지하고 나머지 세션만 초기화
+            saved_oauth_config = st.session_state.get("user_oauth_config")
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
+            if saved_oauth_config:
+                st.session_state.user_oauth_config = saved_oauth_config
             st.rerun()
 
         # ── Gmail 서명 설정 ──
