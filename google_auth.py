@@ -46,6 +46,7 @@ def detect_app_url() -> str:
     """
     현재 앱의 URL을 자동 감지한다.
     Streamlit Cloud, 로컬 등 환경에 따라 적절한 URL을 반환한다.
+    항상 trailing slash를 제거하여 redirect_uri_mismatch를 방지한다.
     """
     try:
         headers = st.context.headers
@@ -57,7 +58,7 @@ def detect_app_url() -> str:
             scheme = "http"
         else:
             scheme = "https"
-        return f"{scheme}://{host}"
+        return f"{scheme}://{host}".rstrip("/")
     except Exception:
         return "http://localhost:8501"
 
@@ -78,7 +79,7 @@ def _get_oauth_config() -> dict | None:
         return {
             "client_id": st.secrets["google"]["client_id"],
             "client_secret": st.secrets["google"]["client_secret"],
-            "redirect_uri": st.secrets["google"]["redirect_uri"],
+            "redirect_uri": st.secrets["google"]["redirect_uri"].rstrip("/"),
         }
     except Exception:
         return None
@@ -88,10 +89,11 @@ def _get_redirect_uri() -> str:
     """
     현재 앱의 redirect_uri를 결정한다.
     OAuth 설정에 값이 있으면 사용하고, 없으면 앱 URL을 자동 감지한다.
+    항상 trailing slash를 제거하여 redirect_uri_mismatch를 방지한다.
     """
     config = _get_oauth_config()
     if config and config.get("redirect_uri"):
-        return config["redirect_uri"]
+        return config["redirect_uri"].rstrip("/")
     return detect_app_url()
 
 
