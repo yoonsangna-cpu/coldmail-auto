@@ -285,21 +285,28 @@ with st.sidebar:
   - **Google Sheets API**
   - **Google Drive API**
 
-**3단계: OAuth 동의 화면** ⚠️ 중요!
-- [Auth Platform → Branding](https://console.cloud.google.com/auth/branding) 에서 앱 이름 등 기본 정보 입력
-- [Audience](https://console.cloud.google.com/auth/audience) → **외부** 선택
-- 🔴 **반드시** 아래 중 하나를 수행:
-  - **PUBLISH APP** 클릭 (앱 게시) — 권장
-  - 또는 **ADD USERS** → 본인 Gmail 주소 추가
+**3단계: OAuth 동의 화면**
+- [Auth Platform → Branding](https://console.cloud.google.com/auth/branding) → 앱 이름, 지원 이메일 입력 후 저장
+- [Audience](https://console.cloud.google.com/auth/audience) → **외부** 선택 → **PUBLISH APP** 클릭
+
+**4단계: Data Access (스코프 등록)** ⚠️ 중요!
+- [Auth Platform → Data Access](https://console.cloud.google.com/auth/scopes) 접속
+- **Add or Remove Scopes** 클릭
+- 아래 스코프를 검색해서 모두 체크 후 **Update** :
+  - `gmail.send`
+  - `gmail.settings.basic`
+  - `spreadsheets`
+  - `drive.file`
+- **SAVE** 클릭
 - ❌ 이 단계를 건너뛰면 **403 에러**가 발생합니다!
 
-**4단계: OAuth 클라이언트 생성**
+**5단계: OAuth 클라이언트 생성**
 - [Clients](https://console.cloud.google.com/auth/clients) → **CREATE CLIENT**
 - 유형: **웹 애플리케이션**
 - 승인된 리디렉션 URI에 아래 주소 추가:
 """)
                 st.code(detected_url, language=None)
-                st.markdown("**5단계: 아래에 발급받은 정보 입력**")
+                st.markdown("**6단계: 아래에 발급받은 정보 입력**")
 
             # ── OAuth 자격증명 입력 폼 ──
             st.subheader("🔑 API 설정 입력")
@@ -356,9 +363,10 @@ with st.sidebar:
                     st.markdown(f"""
 **⚠️ 로그인 전 체크리스트:**
 1. ✅ Google Cloud Console에서 **Gmail API, Sheets API, Drive API** 활성화 했는가?
-2. ✅ [OAuth 동의 화면 → Audience](https://console.cloud.google.com/auth/audience)에서 **PUBLISH APP** 했는가?
-   - 또는 **ADD USERS**로 본인 Gmail 추가했는가?
-3. ✅ [OAuth 클라이언트](https://console.cloud.google.com/auth/clients) 승인된 리디렉션 URI에 `{ruri}` 이 등록되어 있는가?
+2. ✅ [Audience](https://console.cloud.google.com/auth/audience)에서 **PUBLISH APP** (프로덕션 게시) 했는가?
+3. ✅ [Data Access](https://console.cloud.google.com/auth/scopes)에서 **스코프 등록** 했는가?
+   - `gmail.send`, `gmail.settings.basic`, `spreadsheets`, `drive.file`
+4. ✅ [OAuth 클라이언트](https://console.cloud.google.com/auth/clients) 승인된 리디렉션 URI에 `{ruri}` 이 등록되어 있는가?
 """)
 
             try:
@@ -395,9 +403,9 @@ with st.sidebar:
 
                 # ── 403 에러 안내 ──
                 st.error(
-                    "**🔴 403 에러가 뜨나요?** → [Google Cloud Console → Audience]"
-                    "(https://console.cloud.google.com/auth/audience)에 접속해서 "
-                    "**PUBLISH APP**을 클릭하세요. 이것을 안 하면 절대 로그인이 안 됩니다!"
+                    "**🔴 403 에러가 뜨나요?** → [Data Access (스코프 등록)]"
+                    "(https://console.cloud.google.com/auth/scopes)에서 "
+                    "**Add or Remove Scopes** → `gmail.send` 등 스코프를 추가하세요!"
                 )
 
             except Exception as e:
