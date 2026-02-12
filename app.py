@@ -375,11 +375,14 @@ with st.sidebar:
                     cid = current_config.get("client_id", "")
                     ruri = current_config.get("redirect_uri", "")
                     masked_id = f"{cid[:12]}...{cid[-24:]}" if len(cid) > 40 else cid
-                    st.info(f"**사용 중인 설정:**  \nClient ID: `{masked_id}`  \nRedirect URI: `{ruri}`")
-                    st.caption(
-                        f"⚠️ Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
-                        f"**승인된 리디렉션 URI**에 `{ruri}` 가 정확히 등록되어 있어야 합니다."
-                    )
+                    is_custom = bool(st.session_state.get("user_oauth_config"))
+                    source_label = "🔧 직접 입력한 API" if is_custom else "🔒 기본 API"
+                    st.info(f"**{source_label}**  \nClient ID: `{masked_id}`  \nRedirect URI: `{ruri}`")
+                    if is_custom:
+                        st.caption(
+                            f"⚠️ Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
+                            f"**승인된 리디렉션 URI**에 `{ruri}` 가 정확히 등록되어 있어야 합니다."
+                        )
 
                 st.markdown("""
                 <div style="text-align: center; padding: 16px 0 12px 0;">
@@ -462,12 +465,49 @@ with st.sidebar:
                     st.session_state.user_oauth_config = None
                     st.rerun()
 
-            # ── 설정 변경 버튼 (세션 입력값인 경우) ──
+            # ── 사용자 직접 API 연결 / 기본 API로 전환 ──
+            st.divider()
             if st.session_state.get("user_oauth_config"):
-                st.divider()
-                if st.button("⚙️ API 설정 변경", use_container_width=True, type="secondary"):
+                # 현재 사용자 직접 입력 API 사용 중
+                st.caption("🔧 현재 **직접 입력한 API**로 연결 중")
+                if st.button("🔙 기본 API로 돌아가기", use_container_width=True, type="secondary"):
                     st.session_state.user_oauth_config = None
                     st.rerun()
+            else:
+                # 기본 API (앱 소유자 secrets) 사용 중
+                with st.expander("🔧 내 Google API로 직접 연결하기"):
+                    st.caption("기본 설정 대신 본인의 Google Cloud 프로젝트를 사용하고 싶다면 아래에 입력하세요.")
+                    from google_auth import detect_app_url
+                    detected_url = detect_app_url()
+
+                    with st.form("custom_oauth_form"):
+                        custom_client_id = st.text_input(
+                            "Client ID",
+                            placeholder="xxxx.apps.googleusercontent.com",
+                        )
+                        custom_client_secret = st.text_input(
+                            "Client Secret",
+                            type="password",
+                            placeholder="GOCSPX-xxxx",
+                        )
+                        custom_redirect_uri = st.text_input(
+                            "Redirect URI",
+                            value=detected_url,
+                        )
+                        custom_submitted = st.form_submit_button(
+                            "내 API로 연결 →",
+                            use_container_width=True,
+                        )
+                        if custom_submitted:
+                            if not custom_client_id or not custom_client_secret:
+                                st.error("Client ID와 Client Secret을 모두 입력해주세요.")
+                            else:
+                                st.session_state.user_oauth_config = {
+                                    "client_id": custom_client_id.strip(),
+                                    "client_secret": custom_client_secret.strip(),
+                                    "redirect_uri": custom_redirect_uri.strip(),
+                                }
+                                st.rerun()
 
         # 로그인 에러 표시
         if "login_error" in st.session_state:
