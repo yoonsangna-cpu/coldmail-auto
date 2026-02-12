@@ -341,31 +341,36 @@ redirect_uri = "{current_redirect}"
                 st.error(f"OAuth 설정 오류: {e}")
                 st.info("💡 OAuth 설정을 확인해주세요. client_id, client_secret, redirect_uri가 올바른지 확인이 필요합니다.")
 
+            # ── 403 에러 안내 (항상 표시) ──
+            with st.expander("⚠️ 403 에러 / 로그인이 안 되나요?"):
+                from google_auth import _get_redirect_uri
+                current_redirect = _get_redirect_uri()
+                st.markdown(f"""
+Google Cloud 프로젝트가 **테스트 모드**인 경우, 등록된 테스트 사용자만 로그인할 수 있습니다.
+
+**해결 방법 (택 1):**
+
+**방법 1: 테스트 사용자 추가** (간단)
+1. [Google Cloud Console → Audience](https://console.cloud.google.com/auth/audience) 접속
+2. **ADD USERS** 클릭
+3. 로그인할 Google 계정(Gmail) 주소 입력 후 저장
+4. 이 페이지로 돌아와서 다시 로그인
+
+**방법 2: 앱 게시** (모든 사용자 허용)
+1. [Google Cloud Console → Audience](https://console.cloud.google.com/auth/audience) 접속
+2. **PUBLISH APP** 클릭
+3. 확인 후 저장 → 누구나 로그인 가능
+
+---
+**그 외 오류 시 확인사항:**
+- 승인된 리디렉션 URI: `{current_redirect}`
+- Gmail API, Google Sheets API, Google Drive API 활성화 필요
+""")
+
         # 로그인 에러 표시
         if "login_error" in st.session_state:
             st.error(f"⚠️ 로그인 실패: {st.session_state.login_error}")
             del st.session_state.login_error
-
-            # 에러 발생 시 문제 해결 가이드 표시
-            with st.expander("🔍 문제 해결 가이드", expanded=True):
-                from google_auth import _get_redirect_uri
-                current_redirect = _get_redirect_uri()
-                st.markdown(f"""
-**자주 발생하는 문제:**
-
-1. **테스트 사용자 미등록** (가장 흔함)
-   - [Google Cloud Console → OAuth 동의 화면 → Audience](https://console.cloud.google.com/auth/audience)
-   - **ADD USERS**로 로그인할 Google 계정 추가
-
-2. **리디렉션 URI 불일치**
-   - [Google Cloud Console → 사용자 인증 정보 → OAuth 클라이언트](https://console.cloud.google.com/auth/clients)
-   - 승인된 리디렉션 URI에 `{current_redirect}` 등록 확인
-   - secrets의 redirect_uri도 동일한지 확인
-
-3. **API 미활성화**
-   - [API 라이브러리](https://console.cloud.google.com/apis/library)에서 아래 API 활성화 확인:
-   - Gmail API, Google Sheets API, Google Drive API
-""")
 
     else:
         # ── 로그인 후: 프로필 표시 ──
