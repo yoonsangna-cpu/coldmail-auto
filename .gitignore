@@ -1,0 +1,21 @@
+# Streamlit secrets (절대 커밋하지 마세요)
+.streamlit/secrets.toml
+
+# 발송 이력
+send_history.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+
+# OS
+.DS_Store
+Thumbs.db
