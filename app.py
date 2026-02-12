@@ -165,6 +165,7 @@ DEFAULT_STATE = {
     "sending_done": False,
     "gmail_signature": "",
     "use_signature": True,
+    "attachments": [],                 # 첨부 파일 목록
     "daily_limit": 500,               # 일일 발송 한도 (사용자 설정)
     "daily_sent_count": 0,            # 오늘 발송한 건수
     "daily_sent_date": "",            # 마지막 발송 날짜 (YYYY-MM-DD)
@@ -526,6 +527,31 @@ with tab1:
         )
         st.session_state.alt_body = alt_body
 
+    # 파일 첨부
+    st.divider()
+    st.subheader("📎 파일 첨부")
+    st.caption("모든 수신자에게 동일한 파일이 첨부됩니다. 최대 25MB (Gmail 제한)")
+
+    attached_files = st.file_uploader(
+        "첨부할 파일을 선택하세요",
+        accept_multiple_files=True,
+        help="PDF, 이미지, 문서 등 다양한 파일을 첨부할 수 있습니다. Gmail 제한: 총 25MB",
+        key="attachment_uploader",
+    )
+
+    if attached_files:
+        st.session_state.attachments = attached_files
+        total_size = sum(f.size for f in attached_files)
+        size_mb = total_size / (1024 * 1024)
+
+        if size_mb > 25:
+            st.error(f"⚠️ 총 첨부 파일 크기가 {size_mb:.1f}MB입니다. Gmail 제한(25MB)을 초과합니다.")
+        else:
+            file_info = ", ".join([f"**{f.name}** ({f.size/1024:.0f}KB)" for f in attached_files])
+            st.success(f"📎 첨부 파일 {len(attached_files)}개: {file_info}  \n총 크기: {size_mb:.1f}MB")
+    else:
+        st.session_state.attachments = []
+
 
 # ─────────────────────────────────────────────────────────
 # Step 2: 엑셀 업로드
@@ -743,6 +769,11 @@ with tab3:
             if rendered["used_alt"]:
                 st.caption("📌 별도 템플릿 적용됨")
 
+            # 첨부파일 표시
+            if st.session_state.attachments:
+                att_names = ", ".join([f"📎 {f.name}" for f in st.session_state.attachments])
+                st.markdown(f"**Attachments:** {att_names}")
+
             empty_vars = get_empty_variables(mapped_data, used_vars)
             if empty_vars:
                 st.warning(f"⚠️ 빈 값 변수: {', '.join(empty_vars)}")
@@ -921,9 +952,16 @@ with tab4:
             est_sec = est_time % 60
 
             # 발송 정보 표시
+            attach_info = ""
+            if st.session_state.attachments:
+                att_count = len(st.session_state.attachments)
+                att_size = sum(f.size for f in st.session_state.attachments) / (1024 * 1024)
+                attach_info = f"  \n📎 첨부 파일: {att_count}개 ({att_size:.1f}MB)"
+
             st.info(
                 f"📮 **발송 대상: {total}건**  \n"
                 f"⏱️ 예상 소요 시간: 약 {est_min}분 {est_sec}초 (간격 {delay}초 기준)"
+                f"{attach_info}"
             )
 
             # ── 한도 관련 경고 ──
@@ -986,6 +1024,7 @@ with tab4:
                                 from_email=st.session_state.gmail_email,
                                 from_name=st.session_state.gmail_sender_name,
                                 signature_html=sig_html,
+                                attachments=st.session_state.attachments if st.session_state.attachments else None,
                             )
 
                             result = {

@@ -8,9 +8,12 @@ Google OAuth2 인증 + Gmail API 모듈
 
 import os
 import base64
+import mimetypes
 import streamlit as st
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
 
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -184,6 +187,7 @@ def send_email(
     from_email: str = "",
     from_name: str = "",
     signature_html: str = "",
+    attachments: list = None,
 ) -> tuple[bool, str]:
     """
     Gmail API를 통해 이메일을 발송한다.
@@ -196,12 +200,20 @@ def send_email(
         from_email: 발신자 이메일
         from_name: 발신자 이름
         signature_html: Gmail 서명 HTML (비어있으면 서명 없이 발송)
+        attachments: 첨부 파일 리스트 (Streamlit UploadedFile 객체)
 
     Returns:
         (성공 여부, 메시지)
     """
     try:
-        msg = MIMEMultipart("alternative")
+        # 첨부파일이 있으면 mixed, 없으면 alternative
+        if attachments:
+            msg = MIMEMultipart("mixed")
+            msg_body = MIMEMultipart("alternative")
+        else:
+            msg = MIMEMultipart("alternative")
+            msg_body = msg
+
         msg["To"] = to_email
         msg["Subject"] = subject
 
@@ -222,9 +234,32 @@ def send_email(
             )
 
         # Plain text 버전
-        msg.attach(MIMEText(body, "plain", "utf-8"))
+        msg_body.attach(MIMEText(body, "plain", "utf-8"))
         # HTML 버전 (서명 포함)
-        msg.attach(MIMEText(html_body, "html", "utf-8"))
+        msg_body.attach(MIMEText(html_body, "html", "utf-8"))
+
+        # 첨부파일이 있으면 본문을 mixed에 넣고 파일 추가
+        if attachments:
+            msg.attach(msg_body)
+            for file in attachments:
+                file.seek(0)
+                file_data = file.read()
+                file_name = file.name
+
+                mime_type, _ = mimetypes.guess_type(file_name)
+                if mime_type is None:
+                    mime_type = "application/octet-stream"
+                main_type, sub_type = mime_type.split("/", 1)
+
+                attachment = MIMEBase(main_type, sub_type)
+                attachment.set_payload(file_data)
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=file_name,
+                )
+                msg.attach(attachment)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
 
