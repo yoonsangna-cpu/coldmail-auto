@@ -304,5 +304,7 @@ def check_secrets_configured() -> tuple[bool, str]:
 
         return True, "설정 확인됨"
 
-    except (KeyError, FileNotFoundError):
+    except Exception:
+        # KeyError, FileNotFoundError, StreamlitAPIException 등
+        # secrets.toml이 없거나 google 섹션이 없는 모든 경우를 처리
         return False, "missing"

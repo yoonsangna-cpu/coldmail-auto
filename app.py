@@ -201,6 +201,23 @@ def _get_credentials():
 # Google OAuth 콜백 처리
 # ─────────────────────────────────────────────────────────
 query_params = st.query_params
+
+# Google OAuth 에러 응답 처리 (예: 테스트 사용자 미등록, 권한 거부 등)
+if "error" in query_params:
+    error_code = query_params.get("error", "unknown")
+    error_messages = {
+        "access_denied": "접근이 거부되었습니다. Google Cloud 프로젝트가 '테스트' 모드인 경우, OAuth 동의 화면 → Audience에서 사용할 Google 계정을 테스트 사용자로 추가해주세요.",
+        "invalid_client": "OAuth 클라이언트 정보가 올바르지 않습니다. client_id와 client_secret을 확인해주세요.",
+        "redirect_uri_mismatch": "리디렉션 URI가 일치하지 않습니다. Google Cloud Console의 승인된 리디렉션 URI와 secrets의 redirect_uri가 동일한지 확인해주세요.",
+        "invalid_scope": "요청한 OAuth 스코프가 올바르지 않습니다. API가 모두 활성화되어 있는지 확인해주세요.",
+    }
+    st.session_state.login_error = error_messages.get(
+        error_code,
+        f"Google 인증 오류가 발생했습니다. (오류 코드: {error_code})"
+    )
+    st.query_params.clear()
+    st.rerun()
+
 if "code" in query_params and not st.session_state.gmail_connected:
     try:
         code = query_params["code"]
@@ -220,7 +237,13 @@ if "code" in query_params and not st.session_state.gmail_connected:
         except Exception:
             st.session_state.gmail_signature = ""
     except Exception as e:
-        st.session_state.login_error = str(e)
+        error_str = str(e)
+        if "redirect_uri_mismatch" in error_str.lower() or "redirect" in error_str.lower():
+            st.session_state.login_error = "리디렉션 URI가 일치하지 않습니다. Google Cloud Console의 '승인된 리디렉션 URI'와 secrets.toml의 redirect_uri가 현재 앱 URL과 동일한지 확인해주세요."
+        elif "invalid_grant" in error_str.lower():
+            st.session_state.login_error = "인증 코드가 만료되었거나 이미 사용되었습니다. 다시 로그인해주세요."
+        else:
+            st.session_state.login_error = f"로그인 처리 중 오류: {error_str}"
     st.query_params.clear()
     st.rerun()
 
@@ -316,11 +339,33 @@ redirect_uri = "{current_redirect}"
 
             except Exception as e:
                 st.error(f"OAuth 설정 오류: {e}")
+                st.info("💡 OAuth 설정을 확인해주세요. client_id, client_secret, redirect_uri가 올바른지 확인이 필요합니다.")
 
         # 로그인 에러 표시
         if "login_error" in st.session_state:
             st.error(f"⚠️ 로그인 실패: {st.session_state.login_error}")
             del st.session_state.login_error
+
+            # 에러 발생 시 문제 해결 가이드 표시
+            with st.expander("🔍 문제 해결 가이드", expanded=True):
+                from google_auth import _get_redirect_uri
+                current_redirect = _get_redirect_uri()
+                st.markdown(f"""
+**자주 발생하는 문제:**
+
+1. **테스트 사용자 미등록** (가장 흔함)
+   - [Google Cloud Console → OAuth 동의 화면 → Audience](https://console.cloud.google.com/auth/audience)
+   - **ADD USERS**로 로그인할 Google 계정 추가
+
+2. **리디렉션 URI 불일치**
+   - [Google Cloud Console → 사용자 인증 정보 → OAuth 클라이언트](https://console.cloud.google.com/auth/clients)
+   - 승인된 리디렉션 URI에 `{current_redirect}` 등록 확인
+   - secrets의 redirect_uri도 동일한지 확인
+
+3. **API 미활성화**
+   - [API 라이브러리](https://console.cloud.google.com/apis/library)에서 아래 API 활성화 확인:
+   - Gmail API, Google Sheets API, Google Drive API
+""")
 
     else:
         # ── 로그인 후: 프로필 표시 ──
