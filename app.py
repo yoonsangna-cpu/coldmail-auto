@@ -285,10 +285,13 @@ with st.sidebar:
   - **Google Sheets API**
   - **Google Drive API**
 
-**3단계: OAuth 동의 화면**
-- [Auth Platform → Branding](https://console.cloud.google.com/auth/branding) 설정
+**3단계: OAuth 동의 화면** ⚠️ 중요!
+- [Auth Platform → Branding](https://console.cloud.google.com/auth/branding) 에서 앱 이름 등 기본 정보 입력
 - [Audience](https://console.cloud.google.com/auth/audience) → **외부** 선택
-- **PUBLISH APP** 클릭 (또는 ADD USERS로 본인 계정 추가)
+- 🔴 **반드시** 아래 중 하나를 수행:
+  - **PUBLISH APP** 클릭 (앱 게시) — 권장
+  - 또는 **ADD USERS** → 본인 Gmail 주소 추가
+- ❌ 이 단계를 건너뛰면 **403 에러**가 발생합니다!
 
 **4단계: OAuth 클라이언트 생성**
 - [Clients](https://console.cloud.google.com/auth/clients) → **CREATE CLIENT**
@@ -366,6 +369,28 @@ with st.sidebar:
 
                 st.markdown("<br>", unsafe_allow_html=True)
                 st.caption("🔒 로그인 시 Gmail 발송 권한만 요청합니다.  \n비밀번호는 저장되지 않습니다.")
+
+                # ── 403 에러 안내 ──
+                st.warning(
+                    "**403 에러가 뜨나요?** → Google Cloud Console에서 "
+                    "앱을 게시하거나 테스트 사용자를 등록해야 합니다."
+                )
+                with st.expander("403 에러 해결 방법"):
+                    st.markdown("""
+**원인:** Google Cloud 프로젝트가 "테스트" 모드이면, 등록되지 않은 사용자는 로그인할 수 없습니다.
+
+**해결 (택 1):**
+
+1. **앱 게시 (권장)**
+   - [Google Cloud → Audience](https://console.cloud.google.com/auth/audience) 접속
+   - **PUBLISH APP** 클릭 → 확인
+   - 이 페이지로 돌아와서 다시 로그인
+
+2. **테스트 사용자 추가**
+   - [Google Cloud → Audience](https://console.cloud.google.com/auth/audience) 접속
+   - **ADD USERS** → 본인 Gmail 주소 입력 → 저장
+   - 이 페이지로 돌아와서 다시 로그인
+""")
 
             except Exception as e:
                 st.error(f"OAuth 설정 오류: {e}")
