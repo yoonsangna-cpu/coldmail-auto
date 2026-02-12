@@ -16,6 +16,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
+from email.header import Header
+from email.utils import formataddr
 
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
@@ -267,7 +269,10 @@ def send_email(
         msg["Subject"] = subject
 
         if from_name and from_email:
-            msg["From"] = f"{from_name} <{from_email}>"
+            # 한글 등 non-ASCII 이름을 RFC 2047로 인코딩
+            msg["From"] = formataddr((from_name, from_email))
+        elif from_email:
+            msg["From"] = from_email
 
         # HTML 본문 생성 (줄바꿈 → <br>)
         html_body = body.replace("\n", "<br>")
