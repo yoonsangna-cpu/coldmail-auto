@@ -344,41 +344,28 @@ with st.sidebar:
                         st.rerun()
 
         else:
-            # ── OAuth 설정 완료: 현재 설정 확인 + 로그인 버튼 ──
+            # ── OAuth 설정 완료: 로그인 버튼 ──
             from google_auth import _get_oauth_config
             current_config = _get_oauth_config()
-            if current_config:
-                cid = current_config.get("client_id", "")
-                ruri = current_config.get("redirect_uri", "")
-                # Client ID 마스킹 (앞 8자리...뒤 20자리)
-                masked_id = f"{cid[:8]}...{cid[-20:]}" if len(cid) > 30 else cid
-                source = "직접 입력" if st.session_state.get("user_oauth_config") else "secrets.toml"
-
-                with st.expander("✅ 현재 API 설정 확인", expanded=False):
-                    st.markdown(f"""
-- **Client ID:** `{masked_id}`
-- **Redirect URI:** `{ruri}`
-- **설정 출처:** {source}
-""")
-                    st.markdown(f"""
-**⚠️ 로그인 전 체크리스트:**
-1. ✅ Google Cloud Console에서 **Gmail API, Sheets API, Drive API** 활성화 했는가?
-2. ✅ [Audience](https://console.cloud.google.com/auth/audience)에서 **PUBLISH APP** (프로덕션 게시) 했는가?
-3. ✅ [Data Access](https://console.cloud.google.com/auth/scopes)에서 **스코프 등록** 했는가?
-   - `gmail.send`, `gmail.settings.basic`, `spreadsheets`, `drive.file`
-4. ✅ [OAuth 클라이언트](https://console.cloud.google.com/auth/clients) 승인된 리디렉션 URI에 `{ruri}` 이 등록되어 있는가?
-""")
 
             try:
                 auth_url, state = get_authorization_url()
                 st.session_state.oauth_state = state
 
+                # ── 현재 설정 확인 (항상 표시) ──
+                if current_config:
+                    cid = current_config.get("client_id", "")
+                    ruri = current_config.get("redirect_uri", "")
+                    masked_id = f"{cid[:12]}...{cid[-24:]}" if len(cid) > 40 else cid
+                    st.info(f"**사용 중인 설정:**  \nClient ID: `{masked_id}`  \nRedirect URI: `{ruri}`")
+                    st.caption(
+                        f"⚠️ Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
+                        f"**승인된 리디렉션 URI**에 `{ruri}` 가 정확히 등록되어 있어야 합니다."
+                    )
+
                 st.markdown("""
-                <div style="text-align: center; padding: 24px 0 16px 0;">
+                <div style="text-align: center; padding: 16px 0 12px 0;">
                     <div style="font-size: 48px; margin-bottom: 8px;">✉️</div>
-                    <div style="color: #5f6368; font-size: 13px; margin-bottom: 20px;">
-                        Google 계정으로 로그인하여<br/>Gmail 발송 기능을 사용하세요
-                    </div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -397,16 +384,57 @@ with st.sidebar:
                     """,
                     unsafe_allow_html=True,
                 )
-
                 st.markdown("<br>", unsafe_allow_html=True)
-                st.caption("🔒 로그인 시 Gmail 발송 권한만 요청합니다.  \n비밀번호는 저장되지 않습니다.")
 
-                # ── 403 에러 안내 ──
-                st.error(
-                    "**🔴 403 에러가 뜨나요?** → [Data Access (스코프 등록)]"
-                    "(https://console.cloud.google.com/auth/scopes)에서 "
-                    "**Add or Remove Scopes** → `gmail.send` 등 스코프를 추가하세요!"
-                )
+                # ── 403 에러 진단 ──
+                with st.expander("🔴 403 에러가 뜨나요? 여기서 진단하세요"):
+                    st.markdown("**Google 에러 페이지에서 아래 어떤 메시지가 보이나요?**")
+                    err_type = st.radio(
+                        "에러 메시지를 선택하세요",
+                        options=[
+                            "Error 403: access_denied",
+                            "Error 403: org_internal",
+                            "Error 403: redirect_uri_mismatch (또는 400)",
+                            "Error 403: disallowed_useragent",
+                            "에러 화면이 아니라 '이 앱은 확인되지 않았습니다' 경고가 뜸",
+                            "기타 / 잘 모르겠음",
+                        ],
+                        index=None,
+                        label_visibility="collapsed",
+                    )
+                    if err_type == "Error 403: access_denied":
+                        st.error("""**access_denied 해결:**
+1. [Audience](https://console.cloud.google.com/auth/audience) → **PUBLISH APP** 되어있는지 확인
+2. 안 되면 **ADD USERS** → 본인 Gmail 주소 추가
+3. [Branding](https://console.cloud.google.com/auth/branding) → 앱 이름, 지원 이메일이 모두 입력되어 있는지 확인
+""")
+                    elif err_type == "Error 403: org_internal":
+                        st.error("""**org_internal 해결:**
+- 사용자 유형이 **'내부'**로 설정되어 있습니다
+- [Audience](https://console.cloud.google.com/auth/audience) → **'외부'**로 변경하세요
+""")
+                    elif err_type and "redirect_uri" in err_type:
+                        st.error(f"""**redirect_uri_mismatch 해결:**
+- [OAuth 클라이언트](https://console.cloud.google.com/auth/clients) → 승인된 리디렉션 URI에
+- **정확히** `{current_config.get('redirect_uri', '')}` 이 등록되어 있는지 확인
+- 끝에 `/` 유무도 중요합니다!
+""")
+                    elif err_type == "Error 403: disallowed_useragent":
+                        st.error("""**disallowed_useragent 해결:**
+- 인앱 브라우저(카카오톡, 인스타 등)에서는 로그인이 안 됩니다
+- **Chrome, Safari 등 일반 브라우저**에서 열어주세요
+""")
+                    elif err_type and "확인되지 않았습니다" in err_type:
+                        st.warning("""**이건 403이 아닙니다! 정상 동작입니다.**
+- '고급' 또는 'Advanced' 클릭
+- '(앱 이름)(으)로 이동' 클릭
+- 그러면 정상적으로 로그인됩니다
+""")
+                    elif err_type == "기타 / 잘 모르겠음":
+                        st.info("""**에러 페이지의 전체 내용을 확인해주세요:**
+- "Error XXX: 에러코드" 형태의 텍스트를 찾아주세요
+- URL 주소창에 `error=` 뒤의 텍스트도 확인해주세요
+""")
 
             except Exception as e:
                 st.error(f"OAuth 설정 오류: {e}")
