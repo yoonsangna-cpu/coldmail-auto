@@ -337,7 +337,30 @@ with st.sidebar:
                         st.rerun()
 
         else:
-            # ── OAuth 설정 완료: 로그인 버튼 ──
+            # ── OAuth 설정 완료: 현재 설정 확인 + 로그인 버튼 ──
+            from google_auth import _get_oauth_config
+            current_config = _get_oauth_config()
+            if current_config:
+                cid = current_config.get("client_id", "")
+                ruri = current_config.get("redirect_uri", "")
+                # Client ID 마스킹 (앞 8자리...뒤 20자리)
+                masked_id = f"{cid[:8]}...{cid[-20:]}" if len(cid) > 30 else cid
+                source = "직접 입력" if st.session_state.get("user_oauth_config") else "secrets.toml"
+
+                with st.expander("✅ 현재 API 설정 확인", expanded=False):
+                    st.markdown(f"""
+- **Client ID:** `{masked_id}`
+- **Redirect URI:** `{ruri}`
+- **설정 출처:** {source}
+""")
+                    st.markdown(f"""
+**⚠️ 로그인 전 체크리스트:**
+1. ✅ Google Cloud Console에서 **Gmail API, Sheets API, Drive API** 활성화 했는가?
+2. ✅ [OAuth 동의 화면 → Audience](https://console.cloud.google.com/auth/audience)에서 **PUBLISH APP** 했는가?
+   - 또는 **ADD USERS**로 본인 Gmail 추가했는가?
+3. ✅ [OAuth 클라이언트](https://console.cloud.google.com/auth/clients) 승인된 리디렉션 URI에 `{ruri}` 이 등록되어 있는가?
+""")
+
             try:
                 auth_url, state = get_authorization_url()
                 st.session_state.oauth_state = state
@@ -371,26 +394,11 @@ with st.sidebar:
                 st.caption("🔒 로그인 시 Gmail 발송 권한만 요청합니다.  \n비밀번호는 저장되지 않습니다.")
 
                 # ── 403 에러 안내 ──
-                st.warning(
-                    "**403 에러가 뜨나요?** → Google Cloud Console에서 "
-                    "앱을 게시하거나 테스트 사용자를 등록해야 합니다."
+                st.error(
+                    "**🔴 403 에러가 뜨나요?** → [Google Cloud Console → Audience]"
+                    "(https://console.cloud.google.com/auth/audience)에 접속해서 "
+                    "**PUBLISH APP**을 클릭하세요. 이것을 안 하면 절대 로그인이 안 됩니다!"
                 )
-                with st.expander("403 에러 해결 방법"):
-                    st.markdown("""
-**원인:** Google Cloud 프로젝트가 "테스트" 모드이면, 등록되지 않은 사용자는 로그인할 수 없습니다.
-
-**해결 (택 1):**
-
-1. **앱 게시 (권장)**
-   - [Google Cloud → Audience](https://console.cloud.google.com/auth/audience) 접속
-   - **PUBLISH APP** 클릭 → 확인
-   - 이 페이지로 돌아와서 다시 로그인
-
-2. **테스트 사용자 추가**
-   - [Google Cloud → Audience](https://console.cloud.google.com/auth/audience) 접속
-   - **ADD USERS** → 본인 Gmail 주소 입력 → 저장
-   - 이 페이지로 돌아와서 다시 로그인
-""")
 
             except Exception as e:
                 st.error(f"OAuth 설정 오류: {e}")
