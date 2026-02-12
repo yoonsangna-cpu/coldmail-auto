@@ -476,9 +476,23 @@ with st.sidebar:
             else:
                 # 기본 API (앱 소유자 secrets) 사용 중
                 with st.expander("🔧 내 Google API로 직접 연결하기"):
-                    st.caption("기본 설정 대신 본인의 Google Cloud 프로젝트를 사용하고 싶다면 아래에 입력하세요.")
+                    st.caption("기본 API 대신 본인의 Google Cloud 프로젝트를 사용할 수 있습니다.")
                     from google_auth import detect_app_url
                     detected_url = detect_app_url()
+
+                    st.markdown(f"""
+**설정 방법 (약 5분 소요)**
+
+1. [Google Cloud Console](https://console.cloud.google.com/) 접속 → 새 프로젝트 생성
+2. [API 라이브러리](https://console.cloud.google.com/apis/library)에서 아래 3개 **사용** 클릭:
+   - Gmail API / Google Sheets API / Google Drive API
+3. [OAuth 동의 화면 → Branding](https://console.cloud.google.com/auth/branding) → 앱 이름, 이메일 입력 후 저장
+4. [Audience](https://console.cloud.google.com/auth/audience) → **외부** 선택 → **PUBLISH APP**
+5. [Clients](https://console.cloud.google.com/auth/clients) → **CREATE CLIENT** → 유형: **웹 애플리케이션**
+6. **승인된 리디렉션 URI**에 아래 추가:
+""")
+                    st.code(detected_url, language=None)
+                    st.markdown("7. 생성 후 **Client ID**와 **Client Secret**을 아래에 입력:")
 
                     with st.form("custom_oauth_form"):
                         custom_client_id = st.text_input(
