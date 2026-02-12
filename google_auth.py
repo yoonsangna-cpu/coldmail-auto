@@ -6,6 +6,8 @@ Google OAuth2 인증 + Gmail API 모듈
 - redirect_uri 자동 감지
 """
 
+from __future__ import annotations
+
 import os
 import base64
 import mimetypes

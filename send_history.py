@@ -5,6 +5,8 @@
 - 다음 발송 시 이미 보낸 이메일을 자동 건너뛰기
 """
 
+from __future__ import annotations
+
 from datetime import datetime
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
