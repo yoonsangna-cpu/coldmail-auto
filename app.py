@@ -11,7 +11,9 @@ from send_history import (
     add_sent_emails_batch,
     get_sent_emails,
     get_sent_count,
+    get_today_sent_count,
     clear_history,
+    verify_sheets_access,
 )
 
 from excel_parser import read_excel, get_column_names, analyze_data, get_row_data
@@ -237,6 +239,22 @@ if "code" in query_params and not st.session_state.gmail_connected:
             st.session_state.gmail_signature = sig
         except Exception:
             st.session_state.gmail_signature = ""
+
+        # Sheets/Drive API 접근 검증 + 오늘 발송 건수 복원
+        try:
+            sheets_ok, sheets_msg = verify_sheets_access(credentials)
+            st.session_state.sheets_api_ok = sheets_ok
+            if not sheets_ok:
+                st.session_state.sheets_api_error = sheets_msg
+            else:
+                st.session_state.sheets_api_error = ""
+                # 오늘 발송 건수를 Google Sheets에서 복원
+                today_count = get_today_sent_count(credentials)
+                if today_count > st.session_state.daily_sent_count:
+                    st.session_state.daily_sent_count = today_count
+        except Exception as e:
+            st.session_state.sheets_api_ok = False
+            st.session_state.sheets_api_error = str(e)
     except Exception as e:
         error_str = str(e)
         if "redirect_uri_mismatch" in error_str.lower() or "redirect" in error_str.lower():
@@ -559,17 +577,28 @@ with st.sidebar:
     if st.session_state.gmail_connected:
         st.divider()
         st.header("📋 발송 이력")
-        creds = _get_credentials()
-        if creds:
-            total_history = get_sent_count(creds)
-            st.metric("누적 발송 완료", f"{total_history}건")
-            if total_history > 0:
-                st.caption("이미 발송한 수신자는 자동으로 건너뜁니다.\n이력은 내 Google Drive 시트에 저장됩니다.")
-                if st.button("🗑️ 이력 초기화", key="sidebar_clear_history", help="이력을 초기화하면 같은 수신자에게 다시 발송할 수 있습니다"):
-                    clear_history(creds)
-                    st.rerun()
-            else:
-                st.caption("아직 발송 이력이 없습니다.")
+
+        # Sheets/Drive API 상태 경고
+        if not st.session_state.get("sheets_api_ok", True):
+            api_err = st.session_state.get("sheets_api_error", "")
+            st.error(f"⚠️ 발송 이력 저장 불가: {api_err}")
+            st.caption("이력 기능 없이도 메일 발송은 가능합니다.")
+        else:
+            creds = _get_credentials()
+            if creds:
+                try:
+                    total_history = get_sent_count(creds)
+                    st.metric("누적 발송 완료", f"{total_history}건")
+                    if total_history > 0:
+                        st.caption("이미 발송한 수신자는 자동으로 건너뜁니다.\n이력은 내 Google Drive 시트에 저장됩니다.")
+                        if st.button("🗑️ 이력 초기화", key="sidebar_clear_history", help="이력을 초기화하면 같은 수신자에게 다시 발송할 수 있습니다"):
+                            clear_history(creds)
+                            st.rerun()
+                    else:
+                        st.caption("아직 발송 이력이 없습니다.")
+                except Exception as e:
+                    st.error(f"⚠️ 이력 조회 실패: {e}")
+                    st.caption("Google Sheets/Drive API가 활성화되어 있는지 확인해주세요.")
 
 
 # ─────────────────────────────────────────────────────────
@@ -1008,7 +1037,12 @@ with tab4:
 
         # 이미 발송한 이메일 목록 로드
         creds = _get_credentials()
-        already_sent = get_sent_emails(creds) if creds else set()
+        already_sent = set()
+        if creds:
+            try:
+                already_sent = get_sent_emails(creds)
+            except Exception as e:
+                st.warning(f"⚠️ 발송 이력을 불러올 수 없습니다: {e}\n\n중복 발송 방지 기능이 작동하지 않을 수 있습니다.")
 
         # 발송 대상 이메일 목록 생성 (이미 보낸 건 제외)
         email_list = []
@@ -1075,7 +1109,11 @@ with tab4:
 
         if total == 0 and skipped_already_sent > 0:
             st.info("🎉 모든 수신자에게 이미 발송 완료되었습니다!")
-            st.caption(f"총 발송 이력: {get_sent_count(creds) if creds else 0}건")
+            try:
+                _hist_count = get_sent_count(creds) if creds else 0
+            except Exception:
+                _hist_count = "?"
+            st.caption(f"총 발송 이력: {_hist_count}건")
 
             if st.button("🗑️ 발송 이력 초기화", help="이력을 초기화하면 모든 수신자에게 다시 발송할 수 있습니다"):
                 if creds:
@@ -1179,7 +1217,9 @@ with tab4:
                                 sent_emails_batch.append(email_data["to"])
                                 # 10건마다 이력 저장 (중간 크래시 대비)
                                 if len(sent_emails_batch) >= 10:
-                                    add_sent_emails_batch(creds, sent_emails_batch)
+                                    save_ok, save_msg = add_sent_emails_batch(creds, sent_emails_batch)
+                                    if not save_ok:
+                                        st.toast(f"⚠️ 이력 저장 경고: {save_msg}", icon="⚠️")
                                     sent_emails_batch = []
                             else:
                                 fail_count += 1
@@ -1217,7 +1257,9 @@ with tab4:
 
                     # 남은 이력 일괄 저장
                     if sent_emails_batch and creds:
-                        add_sent_emails_batch(creds, sent_emails_batch)
+                        save_ok, save_msg = add_sent_emails_batch(creds, sent_emails_batch)
+                        if not save_ok:
+                            st.warning(f"⚠️ 마지막 이력 저장 실패: {save_msg}")
 
                     # 발송 완료
                     st.session_state.send_results = results
@@ -1228,7 +1270,11 @@ with tab4:
                     summary = f"🎉 **발송 완료!**  \n- ✅ 성공: {success_count}건  \n- ❌ 실패: {fail_count}건"
                     if skipped_count > 0:
                         summary += f"  \n- ⏸️ 한도초과 스킵: {skipped_count}건 (내일 이어서 발송 가능)"
-                    summary += f"  \n- 📋 총 발송 이력: {get_sent_count(creds) if creds else '?'}건"
+                    try:
+                        total_sent = get_sent_count(creds) if creds else "?"
+                    except Exception:
+                        total_sent = "?"
+                    summary += f"  \n- 📋 총 발송 이력: {total_sent}건"
                     st.success(summary)
 
         # 발송 완료 후 결과 표시
@@ -1264,4 +1310,8 @@ with tab4:
                     st.rerun()
 
             creds_for_count = _get_credentials()
-            st.caption(f"📋 총 누적 발송 이력: {get_sent_count(creds_for_count) if creds_for_count else 0}건")
+            try:
+                total_count = get_sent_count(creds_for_count) if creds_for_count else 0
+            except Exception:
+                total_count = "?"
+            st.caption(f"📋 총 누적 발송 이력: {total_count}건")

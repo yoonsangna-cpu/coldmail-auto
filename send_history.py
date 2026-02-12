@@ -7,10 +7,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+import logging
+from datetime import datetime, date
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+
+log = logging.getLogger(__name__)
 
 SPREADSHEET_TITLE = "콜드메일_발송이력"
 SHEET_NAME = "발송이력"
@@ -37,25 +40,22 @@ def _find_spreadsheet(credentials: Credentials) -> str | None:
     Returns:
         spreadsheet_id 또는 None
     """
-    try:
-        drive = _get_drive_service(credentials)
-        query = (
-            f"name = '{SPREADSHEET_TITLE}' "
-            f"and mimeType = 'application/vnd.google-apps.spreadsheet' "
-            f"and trashed = false"
-        )
-        result = drive.files().list(
-            q=query,
-            spaces="drive",
-            fields="files(id, name)",
-            pageSize=1,
-        ).execute()
-        files = result.get("files", [])
-        if files:
-            return files[0]["id"]
-        return None
-    except HttpError:
-        return None
+    drive = _get_drive_service(credentials)
+    query = (
+        f"name = '{SPREADSHEET_TITLE}' "
+        f"and mimeType = 'application/vnd.google-apps.spreadsheet' "
+        f"and trashed = false"
+    )
+    result = drive.files().list(
+        q=query,
+        spaces="drive",
+        fields="files(id, name)",
+        pageSize=1,
+    ).execute()
+    files = result.get("files", [])
+    if files:
+        return files[0]["id"]
+    return None
 
 
 def _create_spreadsheet(credentials: Credentials) -> str:
@@ -95,6 +95,52 @@ def _get_or_create_spreadsheet(credentials: Credentials) -> str:
 
 
 # ─────────────────────────────────────────────────────────
+# API 접근성 검증
+# ─────────────────────────────────────────────────────────
+
+def verify_sheets_access(credentials: Credentials) -> tuple[bool, str]:
+    """
+    Google Sheets / Drive API 접근 가능 여부를 확인한다.
+    로그인 직후 한 번 호출하여 API 활성화 상태를 진단.
+
+    Returns:
+        (성공 여부, 메시지)
+    """
+    # 1. Drive API 확인
+    try:
+        drive = _get_drive_service(credentials)
+        drive.files().list(pageSize=1, fields="files(id)").execute()
+    except HttpError as e:
+        if e.resp.status == 403:
+            return False, "Google Drive API가 활성화되지 않았습니다. Google Cloud Console → API 라이브러리에서 'Google Drive API'를 사용 설정해주세요."
+        return False, f"Drive API 오류: {e.reason if hasattr(e, 'reason') else e}"
+    except Exception as e:
+        return False, f"Drive API 접근 실패: {e}"
+
+    # 2. Sheets API 확인
+    try:
+        sheets = _get_sheets_service(credentials)
+        # 기존 스프레드시트가 있으면 읽기, 없으면 생성 시도
+        spreadsheet_id = _find_spreadsheet(credentials)
+        if spreadsheet_id:
+            sheets.spreadsheets().values().get(
+                spreadsheetId=spreadsheet_id,
+                range=f"{SHEET_NAME}!A1:A1",
+            ).execute()
+        else:
+            # 새 스프레드시트 생성 시도
+            _create_spreadsheet(credentials)
+    except HttpError as e:
+        if e.resp.status == 403:
+            return False, "Google Sheets API가 활성화되지 않았습니다. Google Cloud Console → API 라이브러리에서 'Google Sheets API'를 사용 설정해주세요."
+        return False, f"Sheets API 오류: {e.reason if hasattr(e, 'reason') else e}"
+    except Exception as e:
+        return False, f"Sheets API 접근 실패: {e}"
+
+    return True, "정상"
+
+
+# ─────────────────────────────────────────────────────────
 # 공개 API — credentials를 인자로 받음
 # ─────────────────────────────────────────────────────────
 
@@ -104,23 +150,23 @@ def get_sent_emails(credentials: Credentials) -> set[str]:
 
     Args:
         credentials: Google OAuth Credentials 객체
+
+    Raises:
+        HttpError: API 호출 실패 시
     """
-    try:
-        spreadsheet_id = _get_or_create_spreadsheet(credentials)
-        sheets = _get_sheets_service(credentials)
-        result = sheets.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=f"{SHEET_NAME}!A:A",
-        ).execute()
-        values = result.get("values", [])
-        # 첫 행(헤더)은 제외, 소문자로 통일
-        emails = set()
-        for row in values[1:]:
-            if row:
-                emails.add(row[0].strip().lower())
-        return emails
-    except (HttpError, Exception):
-        return set()
+    spreadsheet_id = _get_or_create_spreadsheet(credentials)
+    sheets = _get_sheets_service(credentials)
+    result = sheets.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{SHEET_NAME}!A:A",
+    ).execute()
+    values = result.get("values", [])
+    # 첫 행(헤더)은 제외, 소문자로 통일
+    emails = set()
+    for row in values[1:]:
+        if row:
+            emails.add(row[0].strip().lower())
+    return emails
 
 
 def get_sent_count(credentials: Credentials) -> int:
@@ -128,16 +174,39 @@ def get_sent_count(credentials: Credentials) -> int:
     return len(get_sent_emails(credentials))
 
 
-def add_sent_emails_batch(credentials: Credentials, emails: list[str]) -> None:
+def get_today_sent_count(credentials: Credentials) -> int:
+    """오늘 발송한 건수를 Google Sheets에서 계산하여 반환한다."""
+    try:
+        spreadsheet_id = _get_or_create_spreadsheet(credentials)
+        sheets = _get_sheets_service(credentials)
+        result = sheets.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=f"{SHEET_NAME}!A:B",
+        ).execute()
+        values = result.get("values", [])
+        today_str = date.today().isoformat()  # "YYYY-MM-DD"
+        count = 0
+        for row in values[1:]:  # 헤더 제외
+            if len(row) >= 2 and row[1].startswith(today_str):
+                count += 1
+        return count
+    except Exception:
+        return 0
+
+
+def add_sent_emails_batch(credentials: Credentials, emails: list[str]) -> tuple[bool, str]:
     """
     여러 이메일을 한꺼번에 이력에 추가한다.
 
     Args:
         credentials: Google OAuth Credentials 객체
         emails: 성공 발송된 이메일 주소 리스트
+
+    Returns:
+        (성공 여부, 메시지)
     """
     if not emails:
-        return
+        return True, ""
     try:
         spreadsheet_id = _get_or_create_spreadsheet(credentials)
         sheets = _get_sheets_service(credentials)
@@ -150,60 +219,63 @@ def add_sent_emails_batch(credentials: Credentials, emails: list[str]) -> None:
             insertDataOption="INSERT_ROWS",
             body={"values": rows},
         ).execute()
-    except (HttpError, Exception):
-        pass
+        return True, f"{len(emails)}건 이력 저장 완료"
+    except HttpError as e:
+        msg = f"이력 저장 실패 (Sheets API {e.resp.status}): {e.reason if hasattr(e, 'reason') else e}"
+        log.error(msg)
+        return False, msg
+    except Exception as e:
+        msg = f"이력 저장 실패: {e}"
+        log.error(msg)
+        return False, msg
 
 
-def add_sent_email(credentials: Credentials, email: str) -> None:
+def add_sent_email(credentials: Credentials, email: str) -> tuple[bool, str]:
     """성공 발송된 이메일 1건을 이력에 추가한다."""
-    add_sent_emails_batch(credentials, [email])
+    return add_sent_emails_batch(credentials, [email])
 
 
 def clear_history(credentials: Credentials) -> None:
     """
     발송 이력을 초기화한다 (시트 내용 삭제 후 헤더만 남김).
     """
-    try:
-        spreadsheet_id = _find_spreadsheet(credentials)
-        if not spreadsheet_id:
-            return
-        sheets = _get_sheets_service(credentials)
+    spreadsheet_id = _find_spreadsheet(credentials)
+    if not spreadsheet_id:
+        return
+    sheets = _get_sheets_service(credentials)
 
-        # 시트 ID 가져오기
-        meta = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        sheet_id = None
-        for sheet in meta.get("sheets", []):
-            if sheet["properties"]["title"] == SHEET_NAME:
-                sheet_id = sheet["properties"]["sheetId"]
-                break
+    # 시트 ID 가져오기
+    meta = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    sheet_id = None
+    for sheet in meta.get("sheets", []):
+        if sheet["properties"]["title"] == SHEET_NAME:
+            sheet_id = sheet["properties"]["sheetId"]
+            break
 
-        if sheet_id is None:
-            return
+    if sheet_id is None:
+        return
 
-        # 2행부터 전부 삭제 (헤더 유지)
-        total_rows = 0
-        result = sheets.spreadsheets().values().get(
-            spreadsheetId=spreadsheet_id,
-            range=f"{SHEET_NAME}!A:A",
-        ).execute()
-        total_rows = len(result.get("values", []))
+    # 2행부터 전부 삭제 (헤더 유지)
+    result = sheets.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id,
+        range=f"{SHEET_NAME}!A:A",
+    ).execute()
+    total_rows = len(result.get("values", []))
 
-        if total_rows <= 1:
-            return  # 헤더밖에 없음
+    if total_rows <= 1:
+        return  # 헤더밖에 없음
 
-        requests = [{
-            "deleteDimension": {
-                "range": {
-                    "sheetId": sheet_id,
-                    "dimension": "ROWS",
-                    "startIndex": 1,
-                    "endIndex": total_rows,
-                }
+    requests = [{
+        "deleteDimension": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": 1,
+                "endIndex": total_rows,
             }
-        }]
-        sheets.spreadsheets().batchUpdate(
-            spreadsheetId=spreadsheet_id,
-            body={"requests": requests},
-        ).execute()
-    except (HttpError, Exception):
-        pass
+        }
+    }]
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={"requests": requests},
+    ).execute()
