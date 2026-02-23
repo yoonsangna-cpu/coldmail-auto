@@ -1006,7 +1006,7 @@ with tab3:
             sig_html = ""
             if st.session_state.use_signature and st.session_state.gmail_signature:
                 sig_html = (
-                    f'<div style="border-top: 1px solid #ccc; padding-top: 8px; margin-top: 16px;">'
+                    f'<div style="padding-top: 8px; margin-top: 16px;">'
                     f'{st.session_state.gmail_signature}'
                     f'</div>'
                 )

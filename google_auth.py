@@ -282,7 +282,7 @@ def send_email(
             html_body = (
                 f"{html_body}"
                 f'<br><br>'
-                f'<div style="border-top: 1px solid #ccc; padding-top: 8px; margin-top: 8px;">'
+                f'<div style="padding-top: 8px; margin-top: 8px;">'
                 f'{signature_html}'
                 f'</div>'
             )
