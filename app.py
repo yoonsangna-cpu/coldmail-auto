@@ -6,6 +6,8 @@ Google OAuth2 로그인 + Gmail API 발송
 import streamlit as st
 import pandas as pd
 import time
+import threading
+import io as _io
 
 from send_history import (
     add_sent_emails_batch,
@@ -165,6 +167,8 @@ DEFAULT_STATE = {
     "send_delay": 3,
     "send_results": [],
     "sending_done": False,
+    "send_thread_running": False,
+    "send_progress": None,
     "gmail_signature": "",
     "use_signature": True,
     "attachments": [],                 # 첨부 파일 목록
@@ -192,6 +196,7 @@ def _get_daily_limit() -> int:
 def _get_remaining() -> int:
     return max(0, _get_daily_limit() - st.session_state.daily_sent_count)
 
+
 # ── 인증 헬퍼 (send_history 호출용) ──
 def _get_credentials():
     """세션에 저장된 credentials를 복원한다. 로그인 안 된 경우 None."""
@@ -199,6 +204,189 @@ def _get_credentials():
     if cred_dict:
         return credentials_from_dict(cred_dict)
     return None
+
+
+# ── 백그라운드 메일 발송 ──
+def _background_send(
+    credentials_dict, email_list, sender_email, sender_name,
+    sig_html, attachment_data, delay, daily_limit, initial_daily_sent, progress,
+):
+    """백그라운드 스레드에서 메일을 순차 발송한다. Streamlit 재실행과 무관하게 동작."""
+    try:
+        credentials = credentials_from_dict(credentials_dict)
+        gmail_service = get_gmail_service(credentials)
+
+        fake_attachments = None
+        if attachment_data:
+            fake_attachments = []
+            for att in attachment_data:
+                f = _io.BytesIO(att["data"])
+                f.name = att["name"]
+                fake_attachments.append(f)
+
+        results = progress["results"]
+        total = progress["total"]
+        success_count = 0
+        fail_count = 0
+        skipped_count = 0
+        sent_batch = []
+        current_daily = initial_daily_sent
+
+        for i, ed in enumerate(email_list):
+            if progress.get("cancel"):
+                break
+
+            if current_daily >= daily_limit:
+                for rd in email_list[i:]:
+                    results.append({
+                        "시간": time.strftime("%H:%M:%S"),
+                        "수신자": rd["to"],
+                        "상태": "⏸️ 한도초과",
+                        "메모": f"일일 한도 {daily_limit}건 도달",
+                    })
+                    skipped_count += 1
+                break
+
+            # 100건마다 서비스 재생성 (연결 안정성 + 토큰 갱신)
+            if i > 0 and i % 100 == 0:
+                try:
+                    credentials = credentials_from_dict(credentials_dict)
+                    gmail_service = get_gmail_service(credentials)
+                except Exception:
+                    pass
+
+            # 재시도 로직 (최대 3회, 지수 백오프)
+            success, message = False, ""
+            for attempt in range(3):
+                if fake_attachments:
+                    for f in fake_attachments:
+                        f.seek(0)
+                success, message = send_email(
+                    service=gmail_service,
+                    to_email=ed["to"],
+                    subject=ed["subject"],
+                    body=ed["body"],
+                    from_email=sender_email,
+                    from_name=sender_name,
+                    signature_html=sig_html,
+                    attachments=fake_attachments,
+                )
+                if success:
+                    break
+                if any(k in message for k in ("429", "한도 초과", "500", "503", "502")):
+                    time.sleep(2 ** (attempt + 1))
+                    try:
+                        credentials = credentials_from_dict(credentials_dict)
+                        gmail_service = get_gmail_service(credentials)
+                    except Exception:
+                        pass
+                    continue
+                break
+
+            results.append({
+                "시간": time.strftime("%H:%M:%S"),
+                "수신자": ed["to"],
+                "상태": "✅ 성공" if success else "❌ 실패",
+                "메모": ed.get("note", "") if success else message,
+            })
+
+            if success:
+                success_count += 1
+                current_daily += 1
+                sent_batch.append(ed["to"])
+                if len(sent_batch) >= 50:
+                    try:
+                        c = credentials_from_dict(credentials_dict)
+                        add_sent_emails_batch(c, sent_batch)
+                    except Exception:
+                        pass
+                    sent_batch = []
+            else:
+                fail_count += 1
+
+            progress["current"] = i + 1
+            progress["success"] = success_count
+            progress["fail"] = fail_count
+            progress["skipped"] = skipped_count
+            progress["final_daily_count"] = current_daily
+
+            if i < total - 1 and not progress.get("cancel"):
+                time.sleep(delay)
+
+        if sent_batch:
+            try:
+                c = credentials_from_dict(credentials_dict)
+                add_sent_emails_batch(c, sent_batch)
+            except Exception:
+                pass
+
+    except Exception as e:
+        progress["error"] = str(e)
+
+    progress["done"] = True
+
+
+@st.fragment(run_every=2)
+def _show_send_progress():
+    """발송 진행 상황을 2초마다 자동 갱신하는 프래그먼트."""
+    progress = st.session_state.get("send_progress")
+    if not progress:
+        st.info("발송 준비 중...")
+        return
+
+    total = progress.get("total", 1)
+    current = progress.get("current", 0)
+    success = progress.get("success", 0)
+    fail = progress.get("fail", 0)
+    skipped = progress.get("skipped", 0)
+    daily_left = max(0, _get_daily_limit() - progress.get("final_daily_count", 0))
+
+    pct = current / total if total > 0 else 0
+    st.progress(min(pct, 1.0))
+    st.markdown(
+        f"**진행:** {current} / {total} ({int(pct * 100)}%)  |  "
+        f"✅ 성공: {success}  |  ❌ 실패: {fail}  |  "
+        f"📊 잔여 한도: {daily_left}건"
+    )
+
+    results = progress.get("results", [])
+    if results:
+        show = results[-50:] if len(results) > 50 else results
+        st.dataframe(pd.DataFrame(show), use_container_width=True)
+        if len(results) > 50:
+            st.caption(f"최근 50건 표시 중 (전체 {len(results)}건)")
+
+    if progress.get("done"):
+        st.session_state.send_thread_running = False
+        st.session_state.sending_done = True
+        st.session_state.send_results = results
+        st.session_state.daily_sent_count = progress.get(
+            "final_daily_count", st.session_state.daily_sent_count
+        )
+
+        error = progress.get("error")
+        if error:
+            st.error(f"❌ 발송 중 오류: {error}")
+
+        _s, _f = success, fail
+        summary = f"🎉 **발송 완료!**  \n- ✅ 성공: {_s}건  \n- ❌ 실패: {_f}건"
+        if skipped > 0:
+            summary += f"  \n- ⏸️ 한도초과 스킵: {skipped}건"
+        creds = _get_credentials()
+        try:
+            _total_sent = get_sent_count(creds) if creds else "?"
+        except Exception:
+            _total_sent = "?"
+        summary += f"  \n- 📋 총 발송 이력: {_total_sent}건"
+        st.success(summary)
+        st.balloons()
+        time.sleep(3)
+        st.rerun()
+    else:
+        if st.button("⏹️ 발송 중단", type="secondary", use_container_width=True):
+            progress["cancel"] = True
+            st.warning("⏳ 현재 메일까지 보낸 후 중단합니다...")
+
 
 # ─────────────────────────────────────────────────────────
 # Google OAuth 콜백 처리
@@ -1065,6 +1253,10 @@ with tab3:
 with tab4:
     st.subheader("🚀 메일 발송")
 
+    _bg_sending = st.session_state.get("send_thread_running", False)
+    if _bg_sending:
+        _show_send_progress()
+
     df = st.session_state.df
     subject_t = st.session_state.subject_template
     body_t = st.session_state.body_template
@@ -1073,7 +1265,9 @@ with tab4:
 
     # 사전 조건 체크
     can_send = True
-    if not st.session_state.gmail_connected:
+    if _bg_sending:
+        can_send = False
+    elif not st.session_state.gmail_connected:
         st.warning("⚠️ 사이드바에서 Google 로그인을 먼저 완료해주세요.")
         can_send = False
     if df is None:
@@ -1211,125 +1405,46 @@ with tab4:
                 )
 
             # 발송 시작 버튼
-            if not st.session_state.sending_done and not limit_blocked:
+            if not st.session_state.sending_done and not limit_blocked and not _bg_sending:
                 if st.button("✉️ 발송 시작", type="primary", use_container_width=True):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    log_container = st.empty()
+                    sig_html = ""
+                    if st.session_state.use_signature and st.session_state.gmail_signature:
+                        sig_html = st.session_state.gmail_signature
 
-                    results = []
-                    success_count = 0
-                    fail_count = 0
-                    skipped_count = 0
-                    sent_emails_batch = []  # 이번에 성공한 이메일 모아서 일괄 저장
+                    att_data = []
+                    if st.session_state.attachments:
+                        for f in st.session_state.attachments:
+                            f.seek(0)
+                            att_data.append({"name": f.name, "data": f.read()})
 
-                    try:
-                        # Gmail API 서비스 생성
-                        credentials = credentials_from_dict(st.session_state.google_credentials)
-                        gmail_service = get_gmail_service(credentials)
+                    send_progress = {
+                        "current": 0, "total": len(email_list),
+                        "success": 0, "fail": 0, "skipped": 0,
+                        "results": [], "done": False, "error": None,
+                        "final_daily_count": st.session_state.daily_sent_count,
+                        "cancel": False,
+                    }
+                    st.session_state.send_progress = send_progress
 
-                        # 서명 HTML 결정
-                        sig_html = ""
-                        if st.session_state.use_signature and st.session_state.gmail_signature:
-                            sig_html = st.session_state.gmail_signature
-
-                        for i, email_data in enumerate(email_list):
-                            # ── 한도 도달 시 자동 중단 ──
-                            if _get_remaining() <= 0:
-                                for remaining_data in email_list[i:]:
-                                    results.append({
-                                        "시간": time.strftime("%H:%M:%S"),
-                                        "수신자": remaining_data["to"],
-                                        "상태": "⏸️ 한도초과",
-                                        "메모": f"일일 한도 {daily_limit}건 도달 → 내일 자동 이어서 발송",
-                                    })
-                                    skipped_count += 1
-                                break
-
-                            success, message = send_email(
-                                service=gmail_service,
-                                to_email=email_data["to"],
-                                subject=email_data["subject"],
-                                body=email_data["body"],
-                                from_email=st.session_state.gmail_email,
-                                from_name=st.session_state.gmail_sender_name,
-                                signature_html=sig_html,
-                                attachments=st.session_state.attachments if st.session_state.attachments else None,
-                            )
-
-                            result = {
-                                "시간": time.strftime("%H:%M:%S"),
-                                "수신자": email_data["to"],
-                                "상태": "✅ 성공" if success else "❌ 실패",
-                                "메모": email_data.get("note", "") if success else message,
-                            }
-                            results.append(result)
-
-                            if success:
-                                success_count += 1
-                                st.session_state.daily_sent_count += 1
-                                sent_emails_batch.append(email_data["to"])
-                                # 10건마다 이력 저장 (중간 크래시 대비)
-                                if len(sent_emails_batch) >= 10:
-                                    save_ok, save_msg = add_sent_emails_batch(creds, sent_emails_batch)
-                                    if not save_ok:
-                                        st.toast(f"⚠️ 이력 저장 경고: {save_msg}", icon="⚠️")
-                                    sent_emails_batch = []
-                            else:
-                                fail_count += 1
-
-                            # 진행률 업데이트
-                            progress = (i + 1) / total
-                            progress_bar.progress(progress)
-
-                            remaining_now = _get_remaining()
-                            status_text.markdown(
-                                f"**진행:** {i + 1} / {total} ({int(progress * 100)}%)  |  "
-                                f"✅ 성공: {success_count}  |  ❌ 실패: {fail_count}  |  "
-                                f"📊 잔여 한도: {remaining_now}건"
-                            )
-
-                            log_container.dataframe(
-                                pd.DataFrame(results),
-                                use_container_width=True,
-                            )
-
-                            # 대기 (마지막 메일 제외)
-                            if i < total - 1:
-                                time.sleep(delay)
-
-                    except Exception as e:
-                        st.error(f"❌ 발송 중 오류 발생: {e}")
-                        for email_data in email_list[len(results):]:
-                            results.append({
-                                "시간": time.strftime("%H:%M:%S"),
-                                "수신자": email_data["to"],
-                                "상태": "❌ 실패",
-                                "메모": str(e),
-                            })
-                            fail_count += 1
-
-                    # 남은 이력 일괄 저장
-                    if sent_emails_batch and creds:
-                        save_ok, save_msg = add_sent_emails_batch(creds, sent_emails_batch)
-                        if not save_ok:
-                            st.warning(f"⚠️ 마지막 이력 저장 실패: {save_msg}")
-
-                    # 발송 완료
-                    st.session_state.send_results = results
-                    st.session_state.sending_done = True
-
-                    st.balloons()
-
-                    summary = f"🎉 **발송 완료!**  \n- ✅ 성공: {success_count}건  \n- ❌ 실패: {fail_count}건"
-                    if skipped_count > 0:
-                        summary += f"  \n- ⏸️ 한도초과 스킵: {skipped_count}건 (내일 이어서 발송 가능)"
-                    try:
-                        total_sent = get_sent_count(creds) if creds else "?"
-                    except Exception:
-                        total_sent = "?"
-                    summary += f"  \n- 📋 총 발송 이력: {total_sent}건"
-                    st.success(summary)
+                    thread = threading.Thread(
+                        target=_background_send,
+                        kwargs={
+                            "credentials_dict": st.session_state.google_credentials,
+                            "email_list": list(email_list),
+                            "sender_email": st.session_state.gmail_email,
+                            "sender_name": st.session_state.gmail_sender_name,
+                            "sig_html": sig_html,
+                            "attachment_data": att_data,
+                            "delay": delay,
+                            "daily_limit": daily_limit,
+                            "initial_daily_sent": st.session_state.daily_sent_count,
+                            "progress": send_progress,
+                        },
+                        daemon=True,
+                    )
+                    thread.start()
+                    st.session_state.send_thread_running = True
+                    st.rerun()
 
         # 발송 완료 후 결과 표시
         if st.session_state.sending_done and st.session_state.send_results:
@@ -1353,6 +1468,8 @@ with tab4:
                 if st.button("🔄 이어서 발송 준비", use_container_width=True, help="같은 엑셀로 미발송분을 이어서 발송합니다"):
                     st.session_state.sending_done = False
                     st.session_state.send_results = []
+                    st.session_state.send_thread_running = False
+                    st.session_state.send_progress = None
                     st.rerun()
             with col_btn2:
                 if st.button("🗑️ 발송 이력 초기화", use_container_width=True, help="이력을 초기화하면 모든 수신자에게 다시 발송합니다"):
@@ -1361,6 +1478,8 @@ with tab4:
                         clear_history(creds)
                     st.session_state.sending_done = False
                     st.session_state.send_results = []
+                    st.session_state.send_thread_running = False
+                    st.session_state.send_progress = None
                     st.rerun()
 
             creds_for_count = _get_credentials()
