@@ -117,12 +117,17 @@ def _get_client_config() -> dict:
 
 
 def _create_flow() -> Flow:
-    """OAuth2 Flow 객체를 생성한다."""
+    """OAuth2 Flow 객체를 생성한다.
+    PKCE를 비활성화한다: 새 탭 리다이렉트 시 code_verifier가 유실되어
+    'Missing code verifier' 오류가 발생하므로, client_secret을 사용하는
+    web 클라이언트에서는 PKCE 없이 안전하게 동작한다.
+    """
     redirect_uri = _get_redirect_uri()
     return Flow.from_client_config(
         _get_client_config(),
         scopes=SCOPES,
         redirect_uri=redirect_uri,
+        autogenerate_code_verifier=False,
     )
 
 
