@@ -90,13 +90,25 @@ def _get_oauth_config() -> dict | None:
 def _get_redirect_uri() -> str:
     """
     현재 앱의 redirect_uri를 결정한다.
-    OAuth 설정에 값이 있으면 사용하고, 없으면 앱 URL을 자동 감지한다.
-    항상 trailing slash를 제거하여 redirect_uri_mismatch를 방지한다.
+    우선순위: 사용자 입력 → secrets.toml → 자동 감지.
+    secrets.toml이 localhost인데 실제 앱이 배포 환경이면 자동 감지를 사용한다.
     """
-    config = _get_oauth_config()
-    if config and config.get("redirect_uri"):
-        return config["redirect_uri"].rstrip("/")
-    return detect_app_url()
+    if hasattr(st, "session_state") and st.session_state.get("user_oauth_config"):
+        uri = st.session_state.user_oauth_config.get("redirect_uri", "")
+        if uri:
+            return uri.rstrip("/")
+
+    detected = detect_app_url()
+
+    try:
+        secret_uri = st.secrets["google"]["redirect_uri"].rstrip("/")
+        is_secret_local = "localhost" in secret_uri or "127.0.0.1" in secret_uri
+        is_app_local = "localhost" in detected or "127.0.0.1" in detected
+        if is_secret_local and not is_app_local:
+            return detected
+        return secret_uri
+    except Exception:
+        return detected
 
 
 # ─────────────────────────────────────────────────────────
