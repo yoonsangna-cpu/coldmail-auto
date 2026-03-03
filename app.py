@@ -445,12 +445,24 @@ if "code" in query_params and not st.session_state.gmail_connected:
             st.session_state.sheets_api_error = str(e)
     except Exception as e:
         error_str = str(e)
+        from google_auth import detect_app_url as _detect
+        _used_uri = _detect()
         if "redirect_uri_mismatch" in error_str.lower() or "redirect" in error_str.lower():
-            st.session_state.login_error = "리디렉션 URI가 일치하지 않습니다. Google Cloud Console의 '승인된 리디렉션 URI'와 secrets.toml의 redirect_uri가 현재 앱 URL과 동일한지 확인해주세요."
+            st.session_state.login_error = (
+                f"리디렉션 URI 불일치.\n\n"
+                f"**앱이 사용한 URI:** `{_used_uri}`\n\n"
+                f"Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
+                f"**승인된 리디렉션 URI**에 위 주소가 정확히 등록되어 있는지 확인해주세요."
+            )
         elif "invalid_grant" in error_str.lower():
-            st.session_state.login_error = "인증 코드가 만료되었거나 이미 사용되었습니다. 다시 로그인해주세요."
+            st.session_state.login_error = (
+                f"인증 코드 교환 실패 (invalid_grant).\n\n"
+                f"**사용된 redirect_uri:** `{_used_uri}`\n\n"
+                f"**상세:** {error_str}\n\n"
+                f"Google Cloud Console의 **승인된 리디렉션 URI**에 위 주소가 등록되어 있는지 확인해주세요."
+            )
         else:
-            st.session_state.login_error = f"로그인 처리 중 오류: {error_str}"
+            st.session_state.login_error = f"로그인 처리 중 오류: {error_str}\n\n**redirect_uri:** `{_used_uri}`"
     st.query_params.clear()
     st.rerun()
 
@@ -561,16 +573,16 @@ with st.sidebar:
                 # ── 현재 설정 확인 (항상 표시) ──
                 if current_config:
                     cid = current_config.get("client_id", "")
-                    ruri = current_config.get("redirect_uri", "")
+                    from google_auth import _get_redirect_uri as _actual_uri
+                    ruri = _actual_uri()
                     masked_id = f"{cid[:12]}...{cid[-24:]}" if len(cid) > 40 else cid
                     is_custom = bool(st.session_state.get("user_oauth_config"))
                     source_label = "🔧 직접 입력한 API" if is_custom else "🔒 기본 API"
                     st.info(f"**{source_label}**  \nClient ID: `{masked_id}`  \nRedirect URI: `{ruri}`")
-                    if is_custom:
-                        st.caption(
-                            f"⚠️ Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
-                            f"**승인된 리디렉션 URI**에 `{ruri}` 가 정확히 등록되어 있어야 합니다."
-                        )
+                    st.caption(
+                        f"⚠️ Google Cloud Console → [OAuth 클라이언트](https://console.cloud.google.com/auth/clients)의 "
+                        f"**승인된 리디렉션 URI**에 `{ruri}` 가 **정확히** 등록되어 있어야 합니다."
+                    )
 
                 st.markdown("""
                 <div style="text-align: center; padding: 16px 0 12px 0;">
@@ -581,7 +593,7 @@ with st.sidebar:
                 # 공식 Google 로그인 버튼 스타일
                 st.markdown(
                     f"""
-                    <a href="{auth_url}" target="_self" class="google-btn">
+                    <a href="{auth_url}" target="_blank" class="google-btn">
                         <svg width="18" height="18" viewBox="0 0 48 48">
                             <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
                             <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>

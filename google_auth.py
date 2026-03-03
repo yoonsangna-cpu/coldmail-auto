@@ -89,26 +89,10 @@ def _get_oauth_config() -> dict | None:
 
 def _get_redirect_uri() -> str:
     """
-    현재 앱의 redirect_uri를 결정한다.
-    우선순위: 사용자 입력 → secrets.toml → 자동 감지.
-    secrets.toml이 localhost인데 실제 앱이 배포 환경이면 자동 감지를 사용한다.
+    현재 앱의 redirect_uri를 항상 자동 감지한다.
+    세션/설정에 의존하지 않아 OAuth 리다이렉트 전후로 항상 동일한 값을 반환한다.
     """
-    if hasattr(st, "session_state") and st.session_state.get("user_oauth_config"):
-        uri = st.session_state.user_oauth_config.get("redirect_uri", "")
-        if uri:
-            return uri.rstrip("/")
-
-    detected = detect_app_url()
-
-    try:
-        secret_uri = st.secrets["google"]["redirect_uri"].rstrip("/")
-        is_secret_local = "localhost" in secret_uri or "127.0.0.1" in secret_uri
-        is_app_local = "localhost" in detected or "127.0.0.1" in detected
-        if is_secret_local and not is_app_local:
-            return detected
-        return secret_uri
-    except Exception:
-        return detected
+    return detect_app_url()
 
 
 # ─────────────────────────────────────────────────────────
@@ -120,7 +104,7 @@ def _get_client_config() -> dict:
     config = _get_oauth_config()
     if not config:
         raise ValueError("OAuth 설정이 없습니다. client_id와 client_secret을 입력해주세요.")
-    redirect_uri = config["redirect_uri"]
+    redirect_uri = _get_redirect_uri()
     return {
         "web": {
             "client_id": config["client_id"],
